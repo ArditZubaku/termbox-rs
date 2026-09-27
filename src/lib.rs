@@ -14,6 +14,8 @@ mod event;
 mod parse;
 mod termbox;
 
+pub mod global;
+
 pub use crate::attr::{Attribute, rgb_to_attribute};
 pub use crate::cell::Cell;
 pub use crate::error::{Error, Result};
