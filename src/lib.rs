@@ -12,12 +12,14 @@ mod cell;
 mod error;
 mod event;
 mod parse;
+mod termbox;
 
 pub use crate::attr::{Attribute, rgb_to_attribute};
 pub use crate::cell::Cell;
 pub use crate::error::{Error, Result};
 pub use crate::event::{Event, EventKind, Key, Modifier, MouseButton, RawEvent};
 pub use crate::parse::parse_event;
+pub use crate::termbox::{EventSource, InitOptions, InputMode, OutputMode, Termbox};
 
 /// The crate this is built on, re-exported so its API stays reachable without
 /// a second version of it in your dependency tree.
