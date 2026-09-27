@@ -8,8 +8,10 @@
 
 
 mod attr;
+mod cell;
 
 pub use crate::attr::{Attribute, rgb_to_attribute};
+pub use crate::cell::Cell;
 
 /// The crate this is built on, re-exported so its API stays reachable without
 /// a second version of it in your dependency tree.
