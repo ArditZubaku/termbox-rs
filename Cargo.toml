@@ -1,0 +1,15 @@
+[package]
+name = "termbox-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A termbox-go shaped API on top of rustbox: cells, attributes, events and a dirty-tracking back buffer."
+license = "MIT"
+keywords = ["termbox", "terminal", "tui", "rustbox", "cli"]
+categories = ["command-line-interface"]
+readme = "README.md"
+exclude = ["target/*"]
+
+[dependencies]
+rustbox = "0.11.0"
+termbox-sys = "0.2.9"
