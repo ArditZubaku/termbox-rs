@@ -759,7 +759,13 @@ impl Termbox {
     ///
     /// Drawing through it writes straight to termbox's buffer and is invisible
     /// to the dirty tracking here, so follow that with a [`sync`](Self::sync).
-    pub fn rustbox(&self) -> &Arc<RustBox> {
+    ///
+    /// This is a borrow rather than the [`Arc`] it is held in on purpose.
+    /// [`flush`](Self::flush) reaches termbox below the locks [`RustBox`] takes,
+    /// so a handle that outlived the borrow could draw from another thread and
+    /// race the flush instead of queuing behind it. Use [`events`](Self::events)
+    /// to reach the terminal from elsewhere.
+    pub fn rustbox(&self) -> &RustBox {
         &self.rb
     }
 
