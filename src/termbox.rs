@@ -466,19 +466,17 @@ impl Termbox {
             return 0;
         }
         let row = y * self.width;
-        let mut end = x;
-        for ch in text.chars() {
-            if end >= self.width {
-                break;
-            }
-            self.cells[row + end] = Cell { ch, fg, bg };
-            end += 1;
+        let tail = &mut self.cells[row + x..row + self.width];
+        let mut written = 0;
+        for (slot, ch) in tail.iter_mut().zip(text.chars()) {
+            *slot = Cell { ch, fg, bg };
+            written += 1;
         }
-        if end > x {
-            self.dirty[y].touch_range(x as u32, end as u32);
+        if written > 0 {
+            self.dirty[y].touch_range(x as u32, (x + written) as u32);
             self.any_dirty = true;
         }
-        end - x
+        written
     }
 
     /// Writes a single character with both colours.
