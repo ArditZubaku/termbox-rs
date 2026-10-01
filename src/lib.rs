@@ -43,6 +43,25 @@
 //! screen costs one `memcpy` and a few bytes of terminal output, not a call per
 //! cell.
 //!
+//! # Why a third buffer
+//!
+//! termbox keeps two cell buffers of its own: one holding what it has been told
+//! to draw, one holding what it believes is already on screen. Its `tb_present`
+//! walks the two and emits only the cells that differ, which is what stops a
+//! redraw from repainting the whole terminal. The buffer here is a third copy
+//! of the same screen — 96KB each and 288KB between them on a 200x60 terminal.
+//!
+//! termbox will lend out the first of its two through `tb_cell_buffer`, so that
+//! third copy and the memcpy that feeds it could both go. It is not worth what
+//! it costs. The pointer it returns is invalidated whenever the terminal
+//! resizes, so it would have to be refetched every frame.
+//! [`Termbox::suspend`] could no longer promise the buffer outlives the
+//! shutdown it runs over, because termbox frees it. [`Termbox::cell_buffer`]
+//! would be lending out C memory with no owner to borrow from. And reading a
+//! cell back would mean trusting the C side to have left a valid [`char`] in
+//! it, which is a soundness hole rather than a design question. Owning the
+//! buffer is what keeps all four from arising.
+//!
 //! # Threads
 //!
 //! termbox tolerates one reader and one writer at the same time.

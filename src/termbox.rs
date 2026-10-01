@@ -297,6 +297,8 @@ fn restride(
 /// ```
 pub struct Termbox {
     rb: Arc<RustBox>,
+    // Ours rather than termbox's own through tb_cell_buffer; the crate docs say
+    // what that third copy of the screen buys.
     cells: Vec<Cell>,
     width: usize,
     height: usize,
