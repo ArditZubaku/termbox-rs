@@ -569,6 +569,16 @@ impl Termbox {
         self.check_resize();
         self.blit();
         self.rb.present();
+
+        // termbox applies a pending resize inside its present, so a size change
+        // only becomes readable here. Without the second pass the frame that
+        // straddles a resize reaches the terminal at the old dimensions and
+        // stays there until something else flushes.
+        if self.rb.width() != self.width || self.rb.height() != self.height {
+            self.check_resize();
+            self.blit();
+            self.rb.present();
+        }
     }
 
     fn blit(&mut self) {
