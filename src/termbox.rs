@@ -809,6 +809,12 @@ impl Drop for Termbox {
     }
 }
 
+/// A duration as the millisecond count termbox takes, saturating rather than
+/// wrapping into a short or negative timeout.
+fn millis(duration: Duration) -> c_int {
+    duration.as_millis().min(c_int::MAX as u128) as c_int
+}
+
 struct EventInner {
     // Keeps termbox alive for as long as anything can still read from it.
     #[allow(dead_code)]
@@ -878,9 +884,7 @@ impl EventSource {
                 ms => left.min(Duration::from_millis(ms as u64)),
             };
             let mut raw = NIL_EVENT;
-            let rc = unsafe {
-                termbox_sys::tb_peek_event(&mut raw, slice.as_millis().max(1) as c_int)
-            };
+            let rc = unsafe { termbox_sys::tb_peek_event(&mut raw, millis(slice).max(1)) };
             if rc == 0 {
                 continue;
             }
@@ -926,7 +930,7 @@ impl EventSource {
     }
 
     fn granularity_ms(&self) -> c_int {
-        self.inner.granularity.as_millis().min(c_int::MAX as u128) as c_int
+        millis(self.inner.granularity)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
