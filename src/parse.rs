@@ -53,16 +53,43 @@ fn parse_plain(data: &[u8]) -> (Event, usize) {
 }
 
 fn parse_escape(data: &[u8]) -> (Event, usize) {
-    match data.get(1) {
-        None => (key(Modifier::NONE, Key::Esc), 1),
-        Some(b'[') => parse_csi(data),
-        Some(b'O') => parse_ss3(data),
-        // Anything else after an escape is the Alt modifier on the next event.
-        Some(_) => match parse_event(&data[1..]) {
-            (_, 0) => (Event::None, 0),
-            (Event::Key { key: k, .. }, n) => (key(Modifier::ALT, k), n + 1),
-            (event, n) => (event, n + 1),
-        },
+    // Each escape that is not the start of a sequence is the Alt modifier on
+    // whatever follows, so a run of them collapses into one event. Walking the
+    // run rather than recursing through it keeps a stream of 0x1b bytes from
+    // overflowing the stack.
+    let mut skipped = 0;
+    let (event, used) = loop {
+        match data.get(skipped + 1) {
+            None => break (key(Modifier::NONE, Key::Esc), skipped + 1),
+            Some(b'[') => break shift(parse_csi(&data[skipped..]), skipped),
+            Some(b'O') => break shift(parse_ss3(&data[skipped..]), skipped),
+            Some(0x1b) => skipped += 1,
+            Some(_) => {
+                let (event, used) = shift(parse_plain(&data[skipped + 1..]), skipped + 1);
+                return with_alt(event, used);
+            }
+        }
+    };
+    if skipped == 0 {
+        return (event, used);
+    }
+    with_alt(event, used)
+}
+
+fn with_alt(event: Event, used: usize) -> (Event, usize) {
+    match event {
+        _ if used == 0 => (Event::None, 0),
+        Event::Key { modifier, key: k } => (key(modifier | Modifier::ALT, k), used),
+        event => (event, used),
+    }
+}
+
+/// Re-bases a sub-parse onto the bytes that were skipped before it.
+fn shift((event, used): (Event, usize), offset: usize) -> (Event, usize) {
+    if used == 0 {
+        (Event::None, 0)
+    } else {
+        (event, used + offset)
     }
 }
 
@@ -391,6 +418,17 @@ mod tests {
         assert_eq!(parse_event(&[0xed, 0xa0, 0x80]), (Event::None, 1));
         // A genuine short read still asks for more.
         assert_eq!(parse_event(&[0xf0, 0x9f]), (Event::None, 0));
+    }
+
+    #[test]
+    fn a_run_of_escapes_does_not_recurse() {
+        // One stack frame per escape used to overflow at around 20k bytes.
+        let escapes = vec![0x1b_u8; 200_000];
+        assert_eq!(k(&escapes), (Modifier::ALT, Key::Esc, 200_000));
+
+        let mut run = vec![0x1b_u8; 200_000];
+        run.extend_from_slice(b"[A");
+        assert_eq!(k(&run), (Modifier::ALT, Key::ArrowUp, 200_002));
     }
 
     #[test]
