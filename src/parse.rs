@@ -5,9 +5,12 @@ use crate::event::{Event, Key, Modifier, MouseButton};
 /// Decodes the first event in `data`.
 ///
 /// Returns the event and how many bytes it used. A count of `0` means `data`
-/// holds an incomplete sequence and more input is needed; an event of
-/// [`Event::None`] with a non-zero count means a sequence was recognised but
-/// carries nothing worth reporting, so skip those bytes and carry on.
+/// ends in an incomplete sequence and more input is needed; an event of
+/// [`Event::None`] with a non-zero count means those bytes carry nothing worth
+/// reporting — either a recognised sequence with no event in it or a byte that
+/// cannot begin one — so skip them and carry on. Bytes that can never become a
+/// sequence are always consumed, so draining a stream of arbitrary input
+/// terminates.
 ///
 /// This is the counterpart to `termbox.ParseEvent`. termbox's C backend decodes
 /// input internally and never hands the byte stream out, so this parser is
@@ -40,9 +43,12 @@ fn parse_plain(data: &[u8]) -> (Event, usize) {
         return (key(Modifier::NONE, Key::from_code(b as u16, 0)), 1);
     }
     match decode_utf8(data) {
-        Some((' ', n)) => (key(Modifier::NONE, Key::Space), n),
-        Some((c, n)) => (key(Modifier::NONE, Key::Char(c)), n),
-        None => (Event::None, 0),
+        Utf8::Char(' ', n) => (key(Modifier::NONE, Key::Space), n),
+        Utf8::Char(c, n) => (key(Modifier::NONE, Key::Char(c)), n),
+        Utf8::Incomplete => (Event::None, 0),
+        // Dropping the byte rather than asking for more is what keeps a stream
+        // with junk in it draining; a zero count here would wedge the caller.
+        Utf8::Invalid => (Event::None, 1),
     }
 }
 
@@ -229,32 +235,47 @@ fn parse_sgr_mouse(data: &[u8]) -> (Event, usize) {
     (Event::None, 0)
 }
 
-/// Decodes one UTF-8 scalar, or `None` if `data` is truncated or malformed.
-fn decode_utf8(data: &[u8]) -> Option<(char, usize)> {
-    let b0 = *data.first()?;
-    let len = match b0 {
-        0x00..=0x7f => 1,
-        0xc2..=0xdf => 2,
-        0xe0..=0xef => 3,
-        0xf0..=0xf4 => 4,
-        _ => return None,
+/// What a byte at the head of the stream turned out to be.
+enum Utf8 {
+    /// A scalar and the bytes it took.
+    Char(char, usize),
+    /// A valid prefix cut short; more input would finish it.
+    Incomplete,
+    /// Not a scalar and never will be, however much more arrives.
+    Invalid,
+}
+
+/// Decodes one UTF-8 scalar from the head of `data`.
+fn decode_utf8(data: &[u8]) -> Utf8 {
+    let Some(&b0) = data.first() else {
+        return Utf8::Incomplete;
+    };
+    // The low bound rejects the overlong encodings the lead byte alone cannot.
+    let (len, lowest) = match b0 {
+        0x00..=0x7f => return Utf8::Char(b0 as char, 1),
+        0xc2..=0xdf => (2, 0x80),
+        0xe0..=0xef => (3, 0x800),
+        0xf0..=0xf4 => (4, 0x10000),
+        _ => return Utf8::Invalid,
     };
     if data.len() < len {
-        return None;
+        return Utf8::Incomplete;
     }
     let mut code = match len {
-        1 => return Some((b0 as char, 1)),
         2 => (b0 & 0x1f) as u32,
         3 => (b0 & 0x0f) as u32,
         _ => (b0 & 0x07) as u32,
     };
     for &b in &data[1..len] {
         if b & 0xc0 != 0x80 {
-            return None;
+            return Utf8::Invalid;
         }
         code = (code << 6) | (b & 0x3f) as u32;
     }
-    char::from_u32(code).map(|c| (c, len))
+    match char::from_u32(code) {
+        Some(c) if code >= lowest => Utf8::Char(c, len),
+        _ => Utf8::Invalid,
+    }
 }
 
 #[cfg(test)]
@@ -354,8 +375,27 @@ mod tests {
     }
 
     #[test]
+    fn junk_is_consumed_rather_than_awaited() {
+        // A zero count means "send more bytes", so a byte that can never start
+        // a sequence must not report one or a draining caller spins forever.
+        for bad in [
+            &[0xff][..],
+            &[0x80][..],
+            &[0xc0, 0x80][..],
+            &[0xf5, 0x80][..],
+        ] {
+            assert_eq!(parse_event(bad), (Event::None, 1), "{bad:x?}");
+        }
+        // Overlong and surrogate encodings are junk too, not short reads.
+        assert_eq!(parse_event(&[0xe0, 0x80, 0x80]), (Event::None, 1));
+        assert_eq!(parse_event(&[0xed, 0xa0, 0x80]), (Event::None, 1));
+        // A genuine short read still asks for more.
+        assert_eq!(parse_event(&[0xf0, 0x9f]), (Event::None, 0));
+    }
+
+    #[test]
     fn a_stream_drains_cleanly() {
-        let mut data: &[u8] = b"ab\x1b[Ac\x1b[3~";
+        let mut data: &[u8] = b"ab\x1b[Ac\xff\x1b[3~";
         let mut keys = Vec::new();
         while !data.is_empty() {
             let (event, n) = parse_event(data);
