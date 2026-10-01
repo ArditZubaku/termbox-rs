@@ -210,6 +210,32 @@ impl Span {
     }
 }
 
+/// Re-lays `cells` from `old` dimensions to `width` by `height`, keeping the
+/// top left corner the two have in common and blanking the rest.
+fn restride(
+    cells: &mut Vec<Cell>,
+    old_width: usize,
+    old_height: usize,
+    width: usize,
+    height: usize,
+) {
+    if width == old_width {
+        // Rows keep their offsets, so only the length changes and a drag that
+        // is purely vertical reuses the buffer it already has.
+        cells.resize(width * height, Cell::BLANK);
+        return;
+    }
+    let mut next = vec![Cell::BLANK; width * height];
+    let rows = height.min(old_height);
+    let cols = width.min(old_width);
+    for y in 0..rows {
+        let src = y * old_width;
+        let dst = y * width;
+        next[dst..dst + cols].copy_from_slice(&cells[src..src + cols]);
+    }
+    *cells = next;
+}
+
 /// A running terminal and the buffer that is drawn into it.
 ///
 /// Everything is written into a local buffer first; [`flush`](Self::flush)
@@ -711,18 +737,11 @@ impl Termbox {
     }
 
     fn resize_to(&mut self, width: usize, height: usize) {
-        let mut cells = vec![Cell::BLANK; width * height];
-        let rows = height.min(self.height);
-        let cols = width.min(self.width);
-        for y in 0..rows {
-            let src = y * self.width;
-            let dst = y * width;
-            cells[dst..dst + cols].copy_from_slice(&self.cells[src..src + cols]);
-        }
-        self.cells = cells;
+        restride(&mut self.cells, self.width, self.height, width, height);
         self.width = width;
         self.height = height;
-        self.dirty = vec![Span::CLEAN; height];
+        self.dirty.clear();
+        self.dirty.resize(height, Span::CLEAN);
         self.all_dirty = true;
         self.any_dirty = true;
     }
@@ -915,6 +934,44 @@ mod tests {
 
         span.touch(0);
         assert_eq!((span.start, span.end), (0, 24));
+    }
+
+    fn marked(width: usize, height: usize) -> Vec<Cell> {
+        (0..width * height)
+            .map(|i| {
+                let ch = char::from_u32(b'a' as u32 + (i % 26) as u32).unwrap();
+                Cell::new(ch, Attribute::RED, Attribute::BLUE)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn restride_keeps_the_shared_corner() {
+        for &(w, h) in &[(4usize, 3usize), (8, 3), (4, 6), (8, 6), (2, 2), (4, 3)] {
+            let (ow, oh) = (4, 3);
+            let mut cells = marked(ow, oh);
+            let before = cells.clone();
+            restride(&mut cells, ow, oh, w, h);
+
+            assert_eq!(cells.len(), w * h, "{w}x{h}");
+            for y in 0..h {
+                for x in 0..w {
+                    let want = if x < ow && y < oh { before[y * ow + x] } else { Cell::BLANK };
+                    assert_eq!(cells[y * w + x], want, "{w}x{h} at ({x},{y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_vertical_resize_keeps_the_allocation() {
+        let mut cells = marked(80, 24);
+        cells.reserve(80 * 50 - cells.len());
+        let before = cells.as_ptr();
+        restride(&mut cells, 80, 24, 80, 50);
+        assert_eq!(cells.as_ptr(), before, "growing within capacity should not reallocate");
+        restride(&mut cells, 80, 50, 80, 10);
+        assert_eq!(cells.as_ptr(), before, "shrinking should not reallocate");
     }
 
     #[test]
