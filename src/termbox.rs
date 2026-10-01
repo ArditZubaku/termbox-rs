@@ -210,6 +210,38 @@ impl Span {
     }
 }
 
+/// One rectangle of the buffer to hand to termbox.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Run {
+    start: usize,
+    len: usize,
+    rows: usize,
+}
+
+/// The rectangle covering the dirty row at `y`, if that row is dirty at all.
+///
+/// Rows sit next to each other in the buffer, so a run of full width ones is a
+/// single contiguous rectangle and goes over in one call. A narrower span has
+/// the wrong stride for that and has to go on its own.
+fn run_at(dirty: &[Span], width: usize, y: usize) -> Option<Run> {
+    let span = dirty[y];
+    if span.start >= span.end {
+        return None;
+    }
+    let start = span.start as usize;
+    let len = (span.end - span.start) as usize;
+    let mut rows = 1;
+    if len == width {
+        while y + rows < dirty.len()
+            && dirty[y + rows].start == 0
+            && dirty[y + rows].end as usize == width
+        {
+            rows += 1;
+        }
+    }
+    Some(Run { start, len, rows })
+}
+
 /// Re-lays `cells` from `old` dimensions to `width` by `height`, keeping the
 /// top left corner the two have in common and blanking the rest.
 fn restride(
@@ -535,7 +567,11 @@ impl Termbox {
     /// only the cells that differ from what is on screen.
     pub fn flush(&mut self) {
         self.check_resize();
+        self.blit();
+        self.rb.present();
+    }
 
+    fn blit(&mut self) {
         if self.all_dirty {
             unsafe {
                 termbox_sys::tb_blit(
@@ -547,27 +583,25 @@ impl Termbox {
                 );
             }
         } else if self.any_dirty {
-            for y in 0..self.height {
-                let span = self.dirty[y];
-                if span.start >= span.end {
+            let mut y = 0;
+            while y < self.height {
+                let Some(run) = run_at(&self.dirty, self.width, y) else {
+                    y += 1;
                     continue;
-                }
-                let start = span.start as usize;
-                let len = (span.end - span.start) as usize;
+                };
                 unsafe {
                     termbox_sys::tb_blit(
-                        start as c_int,
+                        run.start as c_int,
                         y as c_int,
-                        len as c_int,
-                        1,
-                        self.cells[y * self.width + start..].as_ptr().cast(),
+                        run.len as c_int,
+                        run.rows as c_int,
+                        self.cells[y * self.width + run.start..].as_ptr().cast(),
                     );
                 }
+                y += run.rows;
             }
         }
-
         self.mark_clean();
-        self.rb.present();
     }
 
     /// Repaints the whole terminal from scratch.
@@ -934,6 +968,29 @@ mod tests {
 
         span.touch(0);
         assert_eq!((span.start, span.end), (0, 24));
+    }
+
+    fn spans(rows: &[(u32, u32)]) -> Vec<Span> {
+        rows.iter().map(|&(start, end)| Span { start, end }).collect()
+    }
+
+    #[test]
+    fn full_width_rows_blit_as_one_rectangle() {
+        let dirty = spans(&[(0, 10), (0, 10), (0, 10), (0, 0), (3, 7)]);
+
+        // Three contiguous full width rows are one call, not three.
+        assert_eq!(run_at(&dirty, 10, 0), Some(Run { start: 0, len: 10, rows: 3 }));
+        // A clean row reports nothing.
+        assert_eq!(run_at(&dirty, 10, 3), None);
+        // A partial span has the wrong stride to merge, so it stands alone.
+        assert_eq!(run_at(&dirty, 10, 4), Some(Run { start: 3, len: 4, rows: 1 }));
+    }
+
+    #[test]
+    fn a_partial_span_never_absorbs_the_row_below() {
+        let dirty = spans(&[(0, 9), (0, 10)]);
+        assert_eq!(run_at(&dirty, 10, 0), Some(Run { start: 0, len: 9, rows: 1 }));
+        assert_eq!(run_at(&dirty, 10, 1), Some(Run { start: 0, len: 10, rows: 1 }));
     }
 
     fn marked(width: usize, height: usize) -> Vec<Cell> {
