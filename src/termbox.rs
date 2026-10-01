@@ -489,8 +489,8 @@ impl Termbox {
 
     /// Fills a rectangle with one cell, clipped to the buffer.
     pub fn fill(&mut self, x: usize, y: usize, width: usize, height: usize, cell: Cell) {
-        let right = (x + width).min(self.width);
-        let bottom = (y + height).min(self.height);
+        let right = x.saturating_add(width).min(self.width);
+        let bottom = y.saturating_add(height).min(self.height);
         if x >= right || y >= bottom {
             return;
         }
